@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -239,6 +240,10 @@ async def summary(
                 PlotStats.total_plot_size += total_plot_size_harvester
                 PlotStats.total_plots += len(plots["plots"])
                 print(f"   {len(plots['plots'])} plots of size: {format_bytes(total_plot_size_harvester)}")
+                # If the connected harvester didn't complete a sync for 24h show a warning.
+                if "last_sync_time" in plots and time.time() - plots["last_sync_time"] > 24 * 60 * 60:
+                    last_sync_time = time.strftime("%Y-%m-%d, %H:%M:%S", time.localtime(plots["last_sync_time"]))
+                    print(f"\n   WARNING: Last plot sync {last_sync_time}\n")
 
         if len(harvesters_local) > 0:
             print(f"Local Harvester{'s' if len(harvesters_local) > 1 else ''}")
