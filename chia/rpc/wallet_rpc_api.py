@@ -747,7 +747,7 @@ class WalletRpcApi:
         else:
             fee = uint64(0)
         async with self.service.wallet_state_manager.lock:
-            tx: TransactionRecord = await wallet.generate_signed_transaction(amount, puzzle_hash, fee, memos=memos)
+            tx: TransactionRecord = (await wallet.generate_signed_transaction(amount, puzzle_hash, fee, memos=memos))[0]
             await wallet.push_transaction(tx)
 
         # Transaction may not have been included in the mempool yet. Use get_transaction to check.
@@ -833,7 +833,7 @@ class WalletRpcApi:
         else:
             fee = uint64(0)
         async with self.service.wallet_state_manager.lock:
-            txs: TransactionRecord = await wallet.generate_signed_transaction(
+            txs: List[TransactionRecord] = await wallet.generate_signed_transaction(
                 [amount], [puzzle_hash], fee, memos=[memos]
             )
             for tx in txs:
@@ -1268,7 +1268,7 @@ class WalletRpcApi:
 
         if hold_lock:
             async with self.service.wallet_state_manager.lock:
-                signed_tx = await self.service.wallet_state_manager.main_wallet.generate_signed_transaction(
+                [signed_tx] = await self.service.wallet_state_manager.main_wallet.generate_signed_transaction(
                     amount_0,
                     bytes32(puzzle_hash_0),
                     fee,
@@ -1280,7 +1280,7 @@ class WalletRpcApi:
                     puzzle_announcements_to_consume=puzzle_announcements,
                 )
         else:
-            signed_tx = await self.service.wallet_state_manager.main_wallet.generate_signed_transaction(
+            [signed_tx] = await self.service.wallet_state_manager.main_wallet.generate_signed_transaction(
                 amount_0,
                 bytes32(puzzle_hash_0),
                 fee,
