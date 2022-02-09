@@ -19,18 +19,41 @@ from chia.full_node.full_node import FullNode
 from chia.cmds.init_funcs import chia_init
 
 
+exit_with_failure = False
+
+
+class ExitOnError(logging.Handler):
+    def handle(self, record):
+        pass
+
+    def emit(self, record):
+        if record.level != logging.ERROR:
+            return
+        global exit_with_failure
+        exit_with_failure = True
+
+    def createLock(self):
+        self.lock = None
+
+    def _at_fork_reinit(self):
+        pass
+
+
 async def run_sync_test(file: Path, db_version, profile: bool) -> None:
+
+    global exit_with_failure
 
     logger = logging.getLogger()
     logger.setLevel(logging.WARNING)
     handler = logging.FileHandler("test-full-sync.log")
     handler.setFormatter(
         logging.Formatter(
-            "\n%(levelname)-8s %(message)s",
+            "%(levelname)-8s %(message)s",
             datefmt="%Y-%m-%dT%H:%M:%S",
         )
     )
     logger.addHandler(handler)
+    logger.addHandler(ExitOnError())
 
     with tempfile.TemporaryDirectory() as root_dir:
 
@@ -83,6 +106,8 @@ async def run_sync_test(file: Path, db_version, profile: bool) -> None:
                     counter += len(block_batch)
                     print(f"\rheight {counter} {counter/(time() - start_time):0.2f} blocks/s   ", end="")
                     block_batch = []
+                    if exit_with_failure:
+                        raise RuntimeError("error printed to log. exiting")
         finally:
             print("closing full node")
             full_node._close()
