@@ -10,7 +10,7 @@ from tests.setup_nodes import bt, test_constants
 
 from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.cmds.db_upgrade_func import convert_v1_to_v2
-from chia.util.db_wrapper import DBWrapper
+from chia.util.db_wrapper import DBWrapper2
 from chia.full_node.block_store import BlockStore
 from chia.full_node.coin_store import CoinStore
 from chia.full_node.hint_store import HintStore
@@ -21,7 +21,7 @@ class TempFile:
     def __init__(self):
         self.path = Path(tempfile.NamedTemporaryFile().name)
 
-    def __enter__(self) -> DBWrapper:
+    def __enter__(self) -> Path:
         if self.path.exists():
             self.path.unlink()
         return self.path
@@ -65,8 +65,10 @@ class TestDbUpgrade:
 
         with TempFile() as in_file, TempFile() as out_file:
 
-            async with aiosqlite.connect(in_file) as conn:
-                db_wrapper1 = DBWrapper(conn, 1)
+            conn = await aiosqlite.connect(in_file)
+            db_wrapper1 = DBWrapper2(conn, 1)
+            await db_wrapper1.add_connection(await aiosqlite.connect(in_file))
+            try:
                 block_store1 = await BlockStore.create(db_wrapper1)
                 coin_store1 = await CoinStore.create(db_wrapper1, 0)
                 hint_store1 = await HintStore.create(db_wrapper1)
@@ -77,7 +79,6 @@ class TestDbUpgrade:
                 bc = await Blockchain.create(
                     coin_store1, block_store1, test_constants, hint_store1, Path("."), reserved_cores=0
                 )
-                await db_wrapper1.commit_transaction()
 
                 for block in blocks:
                     await _validate_and_add_block(bc, block)
@@ -85,8 +86,11 @@ class TestDbUpgrade:
                 # now, convert v1 in_file to v2 out_file
                 await convert_v1_to_v2(in_file, out_file)
 
-                async with aiosqlite.connect(out_file) as conn2:
-                    db_wrapper2 = DBWrapper(conn2, 2)
+                conn2 = await aiosqlite.connect(out_file)
+                db_wrapper2 = DBWrapper2(conn2, 2)
+                await db_wrapper2.add_connection(await aiosqlite.connect(out_file))
+
+                try:
                     block_store2 = await BlockStore.create(db_wrapper2)
                     coin_store2 = await CoinStore.create(db_wrapper2, 0)
                     hint_store2 = await HintStore.create(db_wrapper2)
@@ -128,3 +132,7 @@ class TestDbUpgrade:
                         for c in coins:
                             n = c.coin.name()
                             assert await coin_store1.get_coin_record(n) == await coin_store2.get_coin_record(n)
+                finally:
+                    await db_wrapper2.close()
+            finally:
+                await db_wrapper1.close()

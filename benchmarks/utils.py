@@ -3,7 +3,7 @@ from chia.util.ints import uint64, uint32
 from chia.consensus.coinbase import create_farmer_coin, create_pool_coin
 from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.sized_bytes import bytes32
-from chia.util.db_wrapper import DBWrapper
+from chia.util.db_wrapper import DBWrapper2
 from typing import Tuple
 from pathlib import Path
 from datetime import datetime
@@ -46,7 +46,7 @@ def rand_g2() -> G2Element:
     return AugSchemeMPL.sign(sk, b"foobar")
 
 
-async def setup_db(name: str, db_version: int) -> DBWrapper:
+async def setup_db(name: str, db_version: int) -> DBWrapper2:
     db_filename = Path(name)
     try:
         os.unlink(db_filename)
@@ -67,4 +67,6 @@ async def setup_db(name: str, db_version: int) -> DBWrapper:
     await connection.execute("pragma journal_mode=wal")
     await connection.execute("pragma synchronous=full")
 
-    return DBWrapper(connection, db_version)
+    ret = DBWrapper2(connection, db_version)
+    await ret.add_connection(await aiosqlite.connect(db_filename))
+    return ret

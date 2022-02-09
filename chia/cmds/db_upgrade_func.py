@@ -66,14 +66,18 @@ COIN_COMMIT_RATE = 30000
 
 async def convert_v1_to_v2(in_path: Path, out_path: Path) -> None:
     import aiosqlite
-    from chia.util.db_wrapper import DBWrapper
+    from chia.util.db_wrapper import DBWrapper2
 
     if out_path.exists():
         print(f"output file already exists. {out_path}")
         raise RuntimeError("already exists")
 
     print(f"opening file for reading: {in_path}")
-    async with aiosqlite.connect(in_path) as in_db:
+    write_conn = await aiosqlite.connect(in_path)
+    db_wrapper = DBWrapper2(write_conn, db_version=1)
+    await db_wrapper.add_connection(await aiosqlite.connect(in_path))
+
+    async with db_wrapper.read_db() as in_db:
         try:
             async with in_db.execute("SELECT * from database_version") as cursor:
                 row = await cursor.fetchone()
@@ -83,7 +87,7 @@ async def convert_v1_to_v2(in_path: Path, out_path: Path) -> None:
         except aiosqlite.OperationalError:
             pass
 
-        store_v1 = await BlockStore.create(DBWrapper(in_db, db_version=1))
+        store_v1 = await BlockStore.create(db_wrapper)
 
         print(f"opening file for writing: {out_path}")
         async with aiosqlite.connect(out_path) as out_db:
@@ -325,11 +329,14 @@ async def convert_v1_to_v2(in_path: Path, out_path: Path) -> None:
 
             print("[5/5] build indices")
             index_start_time = time()
+            db_wrapper_out = DBWrapper2(out_db, db_version=2)
             print("      block store")
-            await BlockStore.create(DBWrapper(out_db, db_version=2))
+            await BlockStore.create(db_wrapper_out)
             print("      coin store")
-            await CoinStore.create(DBWrapper(out_db, db_version=2))
+            await CoinStore.create(db_wrapper_out)
             print("      hint store")
-            await HintStore.create(DBWrapper(out_db, db_version=2))
+            await HintStore.create(db_wrapper_out)
             end_time = time()
             print(f"\r      {end_time - index_start_time:.2f} seconds                             ")
+
+    await db_wrapper.close()
