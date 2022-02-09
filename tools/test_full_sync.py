@@ -5,6 +5,8 @@ import aiosqlite
 import zstd
 import click
 import logging
+import cProfile
+
 from pathlib import Path
 from time import time
 import tempfile
@@ -17,7 +19,7 @@ from chia.full_node.full_node import FullNode
 from chia.cmds.init_funcs import chia_init
 
 
-async def run_sync_test(file: Path, db_version=2) -> None:
+async def run_sync_test(file: Path, db_version, profile: bool) -> None:
 
     logger = logging.getLogger()
     logger.setLevel(logging.WARNING)
@@ -63,9 +65,19 @@ async def run_sync_test(file: Path, db_version=2) -> None:
                     if len(block_batch) < 32:
                         continue
 
+                    if profile:
+                        pr = cProfile.Profile()
+                        pr.enable()
+                        receive_start_time = time()
                     success, advanced_peak, fork_height, coin_changes = await full_node.receive_block_batch(
                         block_batch, None, None  # type: ignore[arg-type]
                     )
+                    if profile:
+                        pr.disable()
+                        if time() - receive_start_time > 10:
+                            pr.create_stats()
+                            pr.dump_stats(f"slow-batch-{counter:05d}.profile")
+
                     assert success
                     assert advanced_peak
                     counter += len(block_batch)
@@ -78,10 +90,23 @@ async def run_sync_test(file: Path, db_version=2) -> None:
 
 
 @click.command()
-@click.argument("file", type=click.Path(), required=True)
+@click.argument("file", type=click.Path(), required=False)
 @click.argument("db-version", type=int, required=False, default=2)
-def main(file: Path, db_version) -> None:
-    asyncio.run(run_sync_test(Path(file), db_version))
+@click.option("--profile", is_flag=True, required=False, default=False)
+@click.option("--analyze-profiles", is_flag=True, required=False, default=False)
+def main(file: Path, db_version: int, profile: bool, analyze_profiles: bool) -> None:
+    if analyze_profiles:
+        from shlex import quote
+        from glob import glob
+        from subprocess import check_call
+
+        for input_file in glob("slow-batch-*.profile"):
+            output = input_file.replace(".profile", ".png")
+            print(f"{input_file}")
+            check_call(f"gprof2dot -f pstats {quote(input_file)} | dot -T png >{quote(output)}", shell=True)
+        return
+
+    asyncio.run(run_sync_test(Path(file), db_version, profile))
 
 
 if __name__ == "__main__":
