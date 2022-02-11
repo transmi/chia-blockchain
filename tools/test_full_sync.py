@@ -6,10 +6,12 @@ import zstd
 import click
 import logging
 import cProfile
+from typing import Iterator
 
 from pathlib import Path
-from time import time
+import time
 import tempfile
+from contextlib import contextmanager
 
 from chia.types.full_block import FullBlock
 from chia.consensus.default_constants import DEFAULT_CONSTANTS
@@ -37,6 +39,25 @@ class ExitOnError(logging.Handler):
 
     def _at_fork_reinit(self):
         pass
+
+
+@contextmanager
+def enable_profiler(profile: bool, counter: int) -> Iterator[None]:
+    if profile:
+        pr = cProfile.Profile()
+        pr.enable()
+        receive_start_time = time.monotonic()
+        try:
+            yield
+            pr.disable()
+            if time.monotonic() - receive_start_time > 10:
+                pr.create_stats()
+                pr.dump_stats(f"slow-batch-{counter:05d}.profile")
+        except:  # noqa: E722
+            pr.disable()
+            raise
+    else:
+        yield
 
 
 async def run_sync_test(file: Path, db_version, profile: bool) -> None:
@@ -80,7 +101,7 @@ async def run_sync_test(file: Path, db_version, profile: bool) -> None:
 
                 block_batch = []
 
-                start_time = time()
+                start_time = time.monotonic()
                 async for r in rows:
                     block = FullBlock.from_bytes(zstd.decompress(r[2]))
 
@@ -88,23 +109,15 @@ async def run_sync_test(file: Path, db_version, profile: bool) -> None:
                     if len(block_batch) < 32:
                         continue
 
-                    if profile:
-                        pr = cProfile.Profile()
-                        pr.enable()
-                        receive_start_time = time()
-                    success, advanced_peak, fork_height, coin_changes = await full_node.receive_block_batch(
-                        block_batch, None, None  # type: ignore[arg-type]
-                    )
-                    if profile:
-                        pr.disable()
-                        if time() - receive_start_time > 10:
-                            pr.create_stats()
-                            pr.dump_stats(f"slow-batch-{counter:05d}.profile")
+                    with enable_profiler(profile, counter):
+                        success, advanced_peak, fork_height, coin_changes = await full_node.receive_block_batch(
+                            block_batch, None, None  # type: ignore[arg-type]
+                        )
 
                     assert success
                     assert advanced_peak
                     counter += len(block_batch)
-                    print(f"\rheight {counter} {counter/(time() - start_time):0.2f} blocks/s   ", end="")
+                    print(f"\rheight {counter} {counter/(time.monotonic() - start_time):0.2f} blocks/s   ", end="")
                     block_batch = []
                     if exit_with_failure:
                         raise RuntimeError("error printed to log. exiting")
@@ -114,25 +127,33 @@ async def run_sync_test(file: Path, db_version, profile: bool) -> None:
             await full_node._await_closed()
 
 
-@click.command()
-@click.argument("file", type=click.Path(), required=False)
-@click.argument("db-version", type=int, required=False, default=2)
-@click.option("--profile", is_flag=True, required=False, default=False)
-@click.option("--analyze-profiles", is_flag=True, required=False, default=False)
-def main(file: Path, db_version: int, profile: bool, analyze_profiles: bool) -> None:
-    if analyze_profiles:
-        from shlex import quote
-        from glob import glob
-        from subprocess import check_call
+@click.group()
+def main() -> None:
+    pass
 
-        for input_file in glob("slow-batch-*.profile"):
-            output = input_file.replace(".profile", ".png")
-            print(f"{input_file}")
-            check_call(f"gprof2dot -f pstats {quote(input_file)} | dot -T png >{quote(output)}", shell=True)
-        return
 
+@main.command("run", short_help="run simulated full sync from an existing blockchain db")
+@click.argument("file", type=click.Path(), required=True)
+@click.option("--db-version", type=int, required=False, default=2, help="the version of the specified db file")
+@click.option("--profile", is_flag=True, required=False, default=False, help="dump CPU profiles for slow batches")
+def run(file: Path, db_version: int, profile: bool) -> None:
     asyncio.run(run_sync_test(Path(file), db_version, profile))
 
+
+@main.command("analyze", short_help="generate call stacks for all profiles dumped to current directory")
+def analyze() -> None:
+    from shlex import quote
+    from glob import glob
+    from subprocess import check_call
+
+    for input_file in glob("slow-batch-*.profile"):
+        output = input_file.replace(".profile", ".png")
+        print(f"{input_file}")
+        check_call(f"gprof2dot -f pstats {quote(input_file)} | dot -T png >{quote(output)}", shell=True)
+
+
+main.add_command(run)
+main.add_command(analyze)
 
 if __name__ == "__main__":
     # pylint: disable = no-value-for-parameter
