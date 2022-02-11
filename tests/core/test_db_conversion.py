@@ -9,6 +9,7 @@ from tests.blockchain.blockchain_test_utils import _validate_and_add_block
 from tests.setup_nodes import bt, test_constants
 
 from chia.types.blockchain_format.sized_bytes import bytes32
+from chia.util.ints import uint32
 from chia.cmds.db_upgrade_func import convert_v1_to_v2
 from chia.util.db_wrapper import DBWrapper
 from chia.full_node.block_store import BlockStore
@@ -21,7 +22,7 @@ class TempFile:
     def __init__(self):
         self.path = Path(tempfile.NamedTemporaryFile().name)
 
-    def __enter__(self) -> DBWrapper:
+    def __enter__(self) -> Path:
         if self.path.exists():
             self.path.unlink()
         return self.path
@@ -39,7 +40,8 @@ def rand_bytes(num) -> bytes:
 
 class TestDbUpgrade:
     @pytest.mark.asyncio
-    async def test_blocks(self):
+    @pytest.mark.parametrize("offline", [True, False])
+    async def test_blocks(self, offline: bool):
 
         blocks = bt.get_consecutive_blocks(758)
 
@@ -68,11 +70,11 @@ class TestDbUpgrade:
             async with aiosqlite.connect(in_file) as conn:
                 db_wrapper1 = DBWrapper(conn, 1)
                 block_store1 = await BlockStore.create(db_wrapper1)
-                coin_store1 = await CoinStore.create(db_wrapper1, 0)
+                coin_store1 = await CoinStore.create(db_wrapper1, uint32(0))
                 hint_store1 = await HintStore.create(db_wrapper1)
 
-                for hint in hints:
-                    await hint_store1.add_hints([(hint[0], hint[1])])
+                for h in hints:
+                    await hint_store1.add_hints([(h[0], h[1])])
 
                 bc = await Blockchain.create(
                     coin_store1, block_store1, test_constants, hint_store1, Path("."), reserved_cores=0
@@ -83,18 +85,18 @@ class TestDbUpgrade:
                     await _validate_and_add_block(bc, block)
 
                 # now, convert v1 in_file to v2 out_file
-                await convert_v1_to_v2(in_file, out_file)
+                await convert_v1_to_v2(in_file, out_file, offline=offline)
 
                 async with aiosqlite.connect(out_file) as conn2:
                     db_wrapper2 = DBWrapper(conn2, 2)
                     block_store2 = await BlockStore.create(db_wrapper2)
-                    coin_store2 = await CoinStore.create(db_wrapper2, 0)
+                    coin_store2 = await CoinStore.create(db_wrapper2, uint32(0))
                     hint_store2 = await HintStore.create(db_wrapper2)
 
                     # check hints
-                    for hint in hints:
-                        assert hint[0] in await hint_store1.get_coin_ids(hint[1])
-                        assert hint[0] in await hint_store2.get_coin_ids(hint[1])
+                    for h in hints:
+                        assert h[0] in await hint_store1.get_coin_ids(h[1])
+                        assert h[0] in await hint_store2.get_coin_ids(h[1])
 
                     # check peak
                     assert await block_store1.get_peak() == await block_store2.get_peak()
