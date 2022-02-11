@@ -40,8 +40,8 @@ def rand_bytes(num) -> bytes:
 
 class TestDbUpgrade:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("offline", [True, False])
-    async def test_blocks(self, offline: bool):
+    @pytest.mark.parametrize("offline, vacuum", [(True, True), (True, False), (False, False)])
+    async def test_blocks(self, offline: bool, vacuum: bool):
 
         blocks = bt.get_consecutive_blocks(758)
 
@@ -85,7 +85,7 @@ class TestDbUpgrade:
                     await _validate_and_add_block(bc, block)
 
                 # now, convert v1 in_file to v2 out_file
-                await convert_v1_to_v2(in_file, out_file, offline=offline)
+                await convert_v1_to_v2(in_file, out_file, offline=offline, vacuum=vacuum)
 
                 async with aiosqlite.connect(out_file) as conn2:
                     db_wrapper2 = DBWrapper(conn2, 2)
