@@ -74,7 +74,12 @@ def get_login_link_cmd(launcher_id: str) -> None:
     default=None,
 )
 def create_cmd(
-    wallet_rpc_port: Optional[int], fingerprint: int, pool_url: str, state: str, fee: int, yes: bool
+    wallet_rpc_port: Optional[int],
+    fingerprint: int,
+    pool_url: str,
+    state: str,
+    fee: int,
+    yes: bool,
 ) -> None:
     import asyncio
     from .wallet_funcs import execute_with_wallet
@@ -87,7 +92,12 @@ def create_cmd(
         print("  pool_url argument (-u) is required for pool starting state")
         return
     valid_initial_states = {"pool": "FARMING_TO_POOL", "local": "SELF_POOLING"}
-    extra_params = {"pool_url": pool_url, "state": valid_initial_states[state], "fee": fee, "yes": yes}
+    extra_params = {
+        "pool_url": pool_url,
+        "state": valid_initial_states[state],
+        "fee": fee,
+        "yes": yes,
+    }
     asyncio.run(execute_with_wallet(wallet_rpc_port, fingerprint, extra_params, create))
 
 

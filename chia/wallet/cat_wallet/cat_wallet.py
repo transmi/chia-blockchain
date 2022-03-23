@@ -8,21 +8,21 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from blspy import AugSchemeMPL, G2Element
 
-from chia.consensus.cost_calculator import calculate_cost_of_program, NPCResult
+from chia.consensus.cost_calculator import NPCResult
 from chia.full_node.bundle_tools import simple_solution_generator
 from chia.full_node.mempool_check_conditions import get_name_puzzle_conditions
-from chia.protocols.wallet_protocol import PuzzleSolutionResponse, CoinState
+from chia.protocols.wallet_protocol import CoinState
 from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.program import Program
 from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.announcement import Announcement
+from chia.types.coin_spend import CoinSpend
 from chia.types.generator_types import BlockGenerator
 from chia.types.spend_bundle import SpendBundle
 from chia.types.condition_opcodes import ConditionOpcode
 from chia.util.byte_types import hexstr_to_bytes
 from chia.util.condition_tools import conditions_dict_for_solution, pkm_pairs_for_conditions_dict
 from chia.util.ints import uint8, uint32, uint64, uint128
-from chia.util.json_util import dict_to_json_str
 from chia.wallet.cat_wallet.cat_constants import DEFAULT_CATS
 from chia.wallet.cat_wallet.cat_info import CATInfo
 from chia.wallet.cat_wallet.cat_utils import (
@@ -46,6 +46,8 @@ from chia.wallet.util.wallet_types import WalletType, AmountWithPuzzlehash
 from chia.wallet.wallet import Wallet
 from chia.wallet.wallet_coin_record import WalletCoinRecord
 from chia.wallet.wallet_info import WalletInfo
+from chia.wallet.util.compute_memos import compute_memos
+import traceback
 
 
 # This should probably not live in this file but it's for experimental right now
@@ -227,10 +229,7 @@ class CATWallet:
                 cost_per_byte=self.wallet_state_manager.constants.COST_PER_BYTE,
                 mempool_mode=True,
             )
-            cost_result: uint64 = calculate_cost_of_program(
-                program.program, result, self.wallet_state_manager.constants.COST_PER_BYTE
-            )
-            self.cost_of_single_tx = cost_result
+            self.cost_of_single_tx = result.cost
             self.log.info(f"Cost of a single tx for CAT wallet: {self.cost_of_single_tx}")
 
         max_cost = self.wallet_state_manager.constants.MAX_BLOCK_COST_CLVM / 2  # avoid full block TXs
@@ -282,31 +281,23 @@ class CATWallet:
                 break
 
         if search_for_parent:
-            data: Dict[str, Any] = {
-                "data": {
-                    "action_data": {
-                        "api_name": "request_puzzle_solution",
-                        "height": height,
-                        "coin_name": coin.parent_coin_info,
-                        "received_coin": coin.name(),
-                    }
-                }
-            }
+            for node_id, node in self.wallet_state_manager.wallet_node.server.all_connections.items():
+                try:
+                    coin_state = await self.wallet_state_manager.wallet_node.get_coin_state(
+                        [coin.parent_coin_info], node
+                    )
+                    assert coin_state[0].coin.name() == coin.parent_coin_info
+                    coin_spend = await self.wallet_state_manager.wallet_node.fetch_puzzle_solution(
+                        node, coin_state[0].spent_height, coin_state[0].coin
+                    )
+                    await self.puzzle_solution_received(coin_spend)
+                    break
+                except Exception as e:
+                    self.log.debug(f"Exception: {e}, traceback: {traceback.format_exc()}")
 
-            data_str = dict_to_json_str(data)
-            await self.wallet_state_manager.create_action(
-                name="request_puzzle_solution",
-                wallet_id=self.id(),
-                wallet_type=self.type(),
-                callback="puzzle_solution_received",
-                done=False,
-                data=data_str,
-                in_transaction=True,
-            )
-
-    async def puzzle_solution_received(self, response: PuzzleSolutionResponse, action_id: int):
-        coin_name = response.coin_name
-        puzzle: Program = response.puzzle
+    async def puzzle_solution_received(self, coin_spend: CoinSpend):
+        coin_name = coin_spend.coin.name()
+        puzzle: Program = Program.from_bytes(bytes(coin_spend.puzzle_reveal))
         matched, curried_args = match_cat_puzzle(puzzle)
         if matched:
             mod_hash, genesis_coin_checker_hash, inner_puzzle = curried_args
@@ -314,7 +305,9 @@ class CATWallet:
             parent_coin = None
             coin_record = await self.wallet_state_manager.coin_store.get_coin_record(coin_name)
             if coin_record is None:
-                coin_states: Optional[List[CoinState]] = await self.wallet_state_manager.get_coin_state([coin_name])
+                coin_states: Optional[List[CoinState]] = await self.wallet_state_manager.wallet_node.get_coin_state(
+                    [coin_name]
+                )
                 if coin_states is not None:
                     parent_coin = coin_states[0].coin
             if coin_record is not None:
@@ -324,7 +317,6 @@ class CATWallet:
             await self.add_lineage(
                 coin_name, LineageProof(parent_coin.parent_coin_info, inner_puzzle.get_tree_hash(), parent_coin.amount)
             )
-            await self.wallet_state_manager.action_store.action_done(action_id)
         else:
             # The parent is not a CAT which means we need to scrub all of its children from our DB
             child_coin_records = await self.wallet_state_manager.coin_store.get_coin_records_by_parent_id(coin_name)
@@ -720,7 +712,7 @@ class CATWallet:
                 trade_id=None,
                 type=uint32(TransactionType.OUTGOING_TX.value),
                 name=spend_bundle.name(),
-                memos=list(spend_bundle.get_memos().items()),
+                memos=list(compute_memos(spend_bundle).items()),
             )
         ]
 

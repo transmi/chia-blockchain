@@ -58,7 +58,6 @@ async def create(args: dict, wallet_client: WalletRpcClient, fingerprint: int) -
     prompt = not args.get("yes", False)
     fee = Decimal(args.get("fee", 0))
     fee_mojos = uint64(int(fee * units["chia"]))
-
     target_puzzle_hash: Optional[bytes32]
     # Could use initial_pool_state_from_dict to simplify
     if state == "SELF_POOLING":
